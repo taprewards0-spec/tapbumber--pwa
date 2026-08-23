@@ -1,29 +1,10 @@
 export default function Home() {
   return (
-    <main style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      minHeight: '100vh',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      color: 'white',
-      fontFamily: 'Arial, sans-serif'
-    }}>
-      <h1 style={{ fontSize: '3rem', marginBottom: '1rem' }}>TapBumber</h1>
-      <p style={{ fontSize: '1.5rem', marginBottom: '2rem' }}>Tap and earn 24/7</p>
-      <button style={{
-        padding: '1rem 2rem',
-        fontSize: '1.2rem',
-        borderRadius: '50px',
-        border: 'none',
-        background: '#fff',
-        color: '#667eea',
-        fontWeight: 'bold',
-        cursor: 'pointer'
-      }}>
-        TAP TO START
-      </button>
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-purple-600 to-pink-600">
+      <div className="text-center text-white">
+        <h1 className="text-4xl font-bold">TapBumber</h1>
+        <p className="mt-4 text-xl">Tap to Earn</p>
+      </div>
     </main>
   )
 }
