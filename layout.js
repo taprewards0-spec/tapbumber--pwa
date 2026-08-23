@@ -2,7 +2,7 @@ import './globals.css'
 
 export const metadata = {
   title: 'TapBumber',
-  description: 'Tap and earn 24/7',
+  description: 'Tap to earn BUMBER',
 }
 
 export default function RootLayout({ children }) {
