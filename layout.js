@@ -1,8 +1,6 @@
-import './globals.css'
-
 export const metadata = {
   title: 'TapBumber',
-  description: 'Tap to earn BUMBER',
+  description: 'Tap to Earn',
 }
 
 export default function RootLayout({ children }) {
