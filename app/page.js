@@ -1,106 +1,148 @@
 "use client";
 import { useFlutterwave, closePaymentModal } from 'flutterwave-react-v3';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// 1. CONNECT SUPABASE
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function HomePage() {
   const [loading, setLoading] = useState(false);
-  
-  // FAKE USER DATA - Replace with your real user from auth
-  const user = {
-    id: "user_123",
-    email: "taprewards0@gmail.com", 
-    name: "Tap Bumber User"
+  const [user, setUser] = useState(null);
+  const [btcBalance, setBtcBalance] = useState(0);
+  const [tapCount, setTapCount] = useState(0);
+
+  // 2. GET REAL USER WHEN PAGE LOADS
+  useEffect(() => {
+    getUser();
+  }, []);
+
+  async function getUser() {
+    const { data: { user } = await supabase.auth.getUser();
+    setUser(user);
+    if (user) {
+      getProfile(user.id);
+    }
   }
+
+  // 3. GET USER PROFILE FROM DATABASE
+  async function getProfile(userId) {
+    const { data } = await supabase
+      .from('profiles')
+      .select('btc_balance, tap_count')
+      .eq('id', userId)
+      .single();
+    
+    if (data) {
+      setBtcBalance(data.btc_balance);
+      setTapCount(data.tap_count);
+    }
+  }
+
   const packageType = "Starter";
   const activationFee = 3000; // ₦3000
 
   const config = {
     public_key: process.env.NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY,
-    tx_ref: `TAPB-${Date.now()}-${user.id}`, // unique transaction ref
+    tx_ref: `TAPB-${Date.now()}-${user?.id}`, 
     amount: activationFee,
     currency: 'NGN',
-    payment_options: 'card,banktransfer,ussd',
+    payment_options: 'card, mobilemoney, ussd',
     customer: {
-      email: user.email,
-      name: user.name,
+      email: user?.email || '',
+      name: user?.user_metadata?.name || 'Tap Bumber User',
     },
     customizations: {
-      title: 'Tap Bumber Activation',
-      description: `Activate ${packageType} Package`,
-      logo: 'https://yourlogo.com/logo.png', // put your logo link
+      title: 'TapBumber Activation',
+      description: `Activation fee for ${packageType} Package`,
+      logo: 'https://tapbumber.com/logo.png',
     },
   };
 
-  const handleFlutterPayment = useFlutterwave(config);
+  const handleFlutterwavePayment = useFlutterwave(config);
 
-  const activateUser = async (transaction) => {
+  // 4. HANDLE PAYMENT
+  const handlePayment = () => {
+    if (!user) return alert('Please login first');
     setLoading(true);
-    try {
-      const res = await fetch('/api/activate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          transaction_id: transaction.transaction_id,
-          tx_ref: transaction.tx_ref,
-          package: packageType,
-          userId: user.id
-        }),
-      });
-      const data = await res.json();
+    handleFlutterwavePayment({
+      callback: async (response) => {
+        console.log(response);
+        setLoading(false);
+        closePaymentModal();
+        // TODO: We will verify this payment on server with webhook later
+        alert('Payment done! We will activate you after verification');
+      },
+      onClose: () => {
+        setLoading(false);
+      },
+    });
+  };
 
-      if (data.ok) {  
-          alert(`Activated! Bonus ₦${data.bonus} credited ✅`);  
-          window.location.reload();  
-        } else {  
-          alert(`Error: ${data.error}`);  
-        }  
-    } catch (err) {  
-      alert('Activation failed');  
-    }  
-    setLoading(false);
+  // 5. HANDLE TAP - SAVES TO DATABASE
+  const handleTap = async () => {
+    if (!user) return alert('Please login first');
+    
+    const newBalance = btcBalance + 0.000032;
+    const newTapCount = tapCount + 1;
+
+    // Update UI first
+    setBtcBalance(newBalance);
+    setTapCount(newTapCount);
+
+    // Save to Supabase
+    const { error } = await supabase
+      .from('profiles')
+      .update({ 
+        btc_balance: newBalance,
+        tap_count: newTapCount
+      })
+      .eq('id', user.id);
+
+    if (error) console.log('Error saving tap:', error);
+  };
+
+  // 6. LOGIN / LOGOUT
+  const handleLogin = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google'
+    });
+    if (error) console.log(error);
+  }
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
   }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-black p-4">
-      <h1 className="text-white text-2xl font-bold mb-4">Activate Your Tap Bumber Account</h1>
-      <p className="text-gray-400 mb-6">Pay ₦{activationFee} to unlock and get bonus</p>
+    <div style={{padding: '20px', textAlign: 'center'}}>
+      <h1>TapBumber</h1>
       
-      <button
-        onClick={() => {
-          handleFlutterPayment({
-            callback: (response) => {
-              console.log(response);
-              if(response.status === "successful"){
-                activateUser(response);
-              }
-              closePaymentModal() // this will close the modal
-            },
-            onClose: () => {},
-          });
-        }}
-        disabled={loading}
-        className="w-full max-w-md bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-4 rounded-lg text-lg disabled:opacity-50"
-      >
-        {loading ? 'Processing...' : `Activate for ₦${activationFee}`}
-      </button>
+      {!user ? (
+        <button onClick={handleLogin}>Login with Google</button>
+      ) : (
+        <>
+          <p>Welcome, {user.email}</p>
+          <p><b>BTC Balance:</b> {btcBalance.toFixed(6)}</p>
+          <p><b>Total Taps:</b> {tapCount}</p>
+          
+          <button 
+            onClick={handleTap}
+            style={{fontSize: '24px', padding: '20px 40px', margin: '10px'}}
+          >
+            TAP +0.000032 BTC
+          </button>
+          <br/>
+          <button onClick={handlePayment} disabled={loading}>
+            {loading ? 'Processing...' : `Activate ${packageType} - ₦${activationFee}`}
+          </button>
+          <br/><br/>
+          <button onClick={handleLogout}>Logout</button>
+        </>
+      )}
     </div>
-  );
-}
-npm install flutterwave-react-v3
-
-NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY=FLWPUBK_TEST-xxxxxxxxxxxxxxxx-X
-FLUTTERWAVE_SECRET_KEY=FLWSECK_TEST-xxxxxxxxxxxxxxxx-X
-
-import { NextResponse } from 'next/server';
-
-export async function POST(req: Request) {
-  const { transaction_id, package, userId } = await req.json();
-  
-  // TODO: Verify with Flutterwave here
-  // const verify = await fetch(`https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`, {...})
-  
-  const bonus = 1000; // example
-  // TODO: Activate user in DB
-  
-  return NextResponse.json({ ok: true, bonus });
+  )
 }
