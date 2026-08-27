@@ -1,186 +1,390 @@
+'use client'
 
-Build a complete mobile-first Progressive Web App (PWA) called TapBumber.
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 
-TapBumber is a Nigerian Naira earning and referral platform with secure user accounts, activation packages, timed earning cycles, wallet balances, referral bonuses, withdrawals, notifications, a WhatsApp community link, and a secure admin control panel.
+const PACKAGES = {
+  Standard: {
+    activation: 3000,
+    perCycle: 50,
+    referral: 500,
+  },
+  Premium: {
+    activation: 5000,
+    perCycle: 120,
+    referral: 800,
+  },
+}
 
-ONLY TWO ACTIVATION PACKAGES
+function getCurrentCycleInfo() {
+  const now = new Date()
 
-Standard — ₦3,000
+  const lagosTime = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Lagos',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(now)
 
-- Activation fee: ₦3,000
-- Reward: ₦50 for each completed 2-hour cycle
-- 12 cycles per daily earning period
-- Maximum cycle earnings for 12 cycles: ₦600
-- Referral bonus: ₦500 to the referrer after the referred user's activation is confirmed
+  const hour = Number(
+    lagosTime.find((part) => part.type === 'hour')?.value || 0
+  )
 
-Premium — ₦5,000
+  const minute = Number(
+    lagosTime.find((part) => part.type === 'minute')?.value || 0
+  )
 
-- Activation fee: ₦5,000
-- Reward: ₦120 for each completed 2-hour cycle
-- 12 cycles per daily earning period
-- Maximum cycle earnings for 12 cycles: ₦1,440
-- Referral bonus: ₦800 to the referrer after the referred user's activation is confirmed
+  const second = Number(
+    lagosTime.find((part) => part.type === 'second')?.value || 0
+  )
 
-Do NOT create any ₦7,500 or ₦10,000 package.
+  // Daily earning period: 5:00 PM → 5:00 PM
+  const hoursSinceFivePM = (hour - 17 + 24) % 24
 
-EARNING CYCLE AND CLAIM WINDOW
+  let cycleNum = Math.floor(hoursSinceFivePM / 2) + 1
 
-- Each earning cycle lasts exactly 2 hours.
-- There are 12 cycles in each daily earning period.
-- The daily earning period runs from 5:00 PM WAT to 5:00 PM WAT the following day.
-- Cycle 1: 5 PM–7 PM.
-- Continue every 2 hours through Cycle 12: 3 PM–5 PM.
-- When a 2-hour cycle ends, its reward becomes claimable.
-- The user has exactly 20 minutes to claim the reward.
-- If the 20-minute claim window expires, that cycle's reward is forfeited and cannot be claimed later.
-- A cycle can only be claimed once.
-- Use server-side time and Africa/Lagos timezone.
-- Display the current cycle, countdown, claim countdown, completed cycles, claimed cycles, and today's earnings.
+  if (cycleNum < 1) cycleNum = 1
+  if (cycleNum > 12) cycleNum = 12
 
-REGISTRATION AND ACTIVATION
+  const cycleStartHour = (17 + (cycleNum - 1) * 2) % 24
+  const cycleEndHour = (cycleStartHour + 2) % 24
 
-- Users can register and log in securely.
-- Give every user a unique User ID and referral code.
-- User selects either the ₦3,000 or ₦5,000 package.
-- Activation must be manually verified by an administrator.
-- Activation statuses: Not Activated, Pending, Activated, Rejected.
-- Users can submit an activation request and payment proof/details.
-- Never automatically mark an activation as successful before admin confirmation.
+  const currentMinutes = minute + second / 60
 
-REFERRAL SYSTEM
+  let minutesIntoCycle
 
-- Every user receives a unique referral link/code.
-- ₦3,000 confirmed activation → referrer receives ₦500.
-- ₦5,000 confirmed activation → referrer receives ₦800.
-- Give the normal referral bonus only once per successful activation.
-- Pending or rejected activations do not count.
-- Display referral count and referral earnings.
+  if (cycleStartHour === 23) {
+    minutesIntoCycle = currentMinutes + 60
+  } else {
+    minutesIntoCycle =
+      (hour - cycleStartHour) * 60 + currentMinutes
+  }
 
-WEEKLY REFERRAL BONUS
+  const cycleDurationMinutes = 120
+  const minutesRemaining = Math.max(
+    0,
+    cycleDurationMinutes - minutesIntoCycle
+  )
 
-- If a user gets 10 successful, admin-confirmed activations within the same week, credit an additional ₦5,000 weekly referral bonus.
-- The 10 activations can be any combination of ₦3,000 and ₦5,000 packages.
-- Each activated user counts only once.
-- Automatically track the weekly count.
-- Prevent duplicate weekly bonuses.
+  return {
+    cycleNum,
+    hour,
+    minute,
+    second,
+    cycleStartHour,
+    cycleEndHour,
+    minutesRemaining,
+  }
+}
 
-WALLET
+function formatCountdown(totalMinutes) {
+  const totalSeconds = Math.max(
+    0,
+    Math.floor(totalMinutes * 60)
+  )
 
-Each user has a wallet displaying:
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
 
-- Available balance
-- Cycle earnings
-- Referral earnings
-- Weekly referral bonuses
-- Transaction history
-- Withdrawal history
+  return `${String(hours).padStart(2, '0')}:${String(
+    minutes
+  ).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
 
-Every earning and bonus must create a transaction record.
-Users cannot manually change their wallet balance.
+export default function Home() {
+  const [user, setUser] = useState(null)
+  const [profile, setProfile] = useState(null)
+  const [wallet, setWallet] = useState({
+    available_balance: 0,
+  })
 
-WITHDRAWALS
+  const [cycleInfo, setCycleInfo] = useState(
+    getCurrentCycleInfo()
+  )
 
-- Minimum withdrawal: ₦1,500.
-- Withdrawal dates: 14th and 30th of every month.
-- Withdrawal window: 6:00 AM–7:30 AM WAT.
-- Withdrawal fee: 20%.
-- Before confirmation, show the requested amount, 20% fee, and net amount.
-- User can cancel before confirming.
-- Collect bank name, account name, and account number.
-- Withdrawal requests go to the administrator for approval.
-- Admin can approve, reject, and mark approved withdrawals as paid.
-- Never automatically mark a withdrawal as paid.
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-ADMIN BANK SETTINGS
+  useEffect(() => {
+    let mounted = true
 
-Do NOT hard-code any personal bank details.
+    const loadDashboard = async () => {
+      try {
+        setLoading(true)
+        setError('')
 
-Create Admin Settings fields for:
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.getUser()
 
-- Bank Name
-- Account Name
-- Account Number
-- Payment Instructions
+        if (authError) {
+          throw authError
+        }
 
-The administrator will enter the real receiving account details privately after the app is built.
+        if (!mounted) return
 
-WHATSAPP GROUP
+        setUser(user)
 
-Add a Join WhatsApp Group option inside the user dashboard/menu.
+        if (!user) {
+          setLoading(false)
+          return
+        }
 
-When clicked, show a button that opens this TapBumber WhatsApp group:
+        const {
+          data: profileData,
+          error: profileError,
+        } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .single()
 
-https://chat.whatsapp.com/FFGIXhlJHMRKHOB3hhp3fb?s=cl&p=a&ilr=1
+        if (profileError) {
+          throw profileError
+        }
 
-USER DASHBOARD
+        if (!mounted) return
 
-Create a clean professional mobile-first TAPBUMBER dashboard showing:
+        setProfile(profileData)
 
-- Wallet balance
-- Selected package
-- Activation status
-- Current cycle
-- 2-hour cycle countdown
-- 20-minute claim countdown when a reward is available
-- Reward per cycle
-- Today's earnings
-- Completed/claimed cycles
-- Claim button
-- Referral section
-- Weekly referral progress
-- Withdrawal section
-- Transaction history
-- Notifications
-- Join WhatsApp Group
-- Help & FAQ
+        const {
+          data: walletData,
+          error: walletError,
+        } = await supabase
+          .from('wallets')
+          .select('*')
+          .eq('user_id', user.id)
+          .single()
 
-ADMIN PANEL
+        if (!walletError && walletData) {
+          setWallet(walletData)
+        }
+      } catch (err) {
+        console.error('Dashboard error:', err)
 
-Create a secure administrator dashboard with:
+        if (mounted) {
+          setError(
+            'Unable to load your TapBumber account right now.'
+          )
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false)
+        }
+      }
+    }
 
-- Overview
-- Users
-- Activations
-- Withdrawals
-- Transactions
-- Referrals
-- Weekly referral bonuses
-- Notifications
-- Settings
-- Help & FAQ
+    loadDashboard()
 
-Admin must be able to:
+    const timer = setInterval(() => {
+      setCycleInfo(getCurrentCycleInfo())
+    }, 1000)
 
-- Search and view users
-- Review activation requests
-- Approve/reject activations
-- View withdrawals
-- Approve/reject withdrawals
-- Mark withdrawals as paid
-- View transactions
-- View referral activity
-- View weekly referral progress
-- Send notifications
-- Configure activation payment details
+    return () => {
+      mounted = false
+      clearInterval(timer)
+    }
+  }, [])
 
-SECURITY
+  const selectedPackage = profile?.package
+    ? PACKAGES[profile.package]
+    : null
 
-- Secure authentication.
-- Protect admin routes.
-- Server-side validation for all financial operations.
-- Prevent duplicate cycle claims.
-- Prevent duplicate referral bonuses.
-- Prevent duplicate weekly bonuses.
-- Prevent withdrawals above available balance.
-- Maintain an audit trail for important admin actions.
-- Users cannot access admin functions or modify wallet balances.
+  const reward = selectedPackage?.perCycle || 0
+  const maxDaily = reward * 12
 
-DESIGN
+  if (loading) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-green-700">
+            TAPBUMBER
+          </h1>
+          <p className="mt-2 text-gray-600">
+            Loading your dashboard...
+          </p>
+        </div>
+      </main>
+    )
+  }
 
-Make the application modern, professional, trustworthy, and mobile-first.
+  return (
+    <main className="min-h-screen bg-gray-50 pb-20">
+      <header className="bg-green-700 text-white p-4 text-center">
+        <h1 className="text-2xl font-bold">
+          TAPBUMBER
+        </h1>
 
-Use Nigerian Naira (₦) throughout the app and prominently brand it TAPBUMBER.
+        <p className="text-sm">
+          Nigerian Naira Earning Platform
+        </p>
+      </header>
 
-Build a real functional full-stack application with database, authentication, backend business logic, user dashboard, admin panel, wallet, activation system, earning-cycle engine, referral system, withdrawals, notifications, and all required pages.
+      <div className="p-4 space-y-4">
 
-These rules are the source of truth. Do not invent additional packages or change any amounts or timing rules.
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4">
+            {error}
+          </div>
+        )}
+
+        {/* WALLET */}
+        <section className="bg-white rounded-xl shadow p-4">
+          <p className="text-gray-500 text-sm">
+            Available Balance
+          </p>
+
+          <p className="text-3xl font-bold text-green-700">
+            ₦{Number(wallet.available_balance || 0).toFixed(2)}
+          </p>
+        </section>
+
+        {/* ACCOUNT */}
+        <section className="bg-white rounded-xl shadow p-4">
+          <h2 className="font-bold text-lg mb-2">
+            Account
+          </h2>
+
+          <p className="text-sm text-gray-600">
+            User ID
+          </p>
+
+          <p className="font-medium break-all">
+            {user?.id || 'Not logged in'}
+          </p>
+
+          <div className="mt-3">
+            <p className="text-sm text-gray-600">
+              Activation Status
+            </p>
+
+            <p className="font-bold">
+              {profile?.activation_status || 'Not Activated'}
+            </p>
+          </div>
+
+          {profile?.package && (
+            <div className="mt-2">
+              <p className="text-sm text-gray-600">
+                Package
+              </p>
+
+              <p className="font-bold">
+                {profile.package}
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* CURRENT CYCLE */}
+        <section className="bg-white rounded-xl shadow p-4">
+          <h2 className="font-bold text-lg">
+            Current Earning Cycle
+          </h2>
+
+          <p className="mt-2 text-2xl font-bold">
+            Cycle {cycleInfo.cycleNum} of 12
+          </p>
+
+          <p className="text-sm text-gray-600 mt-2">
+            Cycle countdown
+          </p>
+
+          <p className="text-2xl font-mono font-bold text-green-700">
+            {formatCountdown(
+              cycleInfo.minutesRemaining
+            )}
+          </p>
+
+          <div className="mt-3 space-y-1 text-sm text-gray-600">
+            <p>
+              Reward per cycle:{' '}
+              <strong>₦{reward}</strong>
+            </p>
+
+            <p>
+              Today's maximum:{' '}
+              <strong>₦{maxDaily}</strong>
+            </p>
+          </div>
+
+          <button
+            type="button"
+            disabled={
+              !profile ||
+              profile.activation_status !== 'Activated'
+            }
+            className="w-full mt-4 bg-green-600 disabled:bg-gray-400 text-white py-3 rounded-lg font-bold"
+          >
+            {profile?.activation_status === 'Activated'
+              ? `Claim ₦${reward}`
+              : 'Activate to Earn'}
+          </button>
+        </section>
+
+        {/* PACKAGES */}
+        <section className="bg-white rounded-xl shadow p-4">
+          <h2 className="font-bold text-lg mb-3">
+            Activation Packages
+          </h2>
+
+          <div className="space-y-3">
+
+            <div className="border rounded-lg p-3">
+              <p className="font-bold">
+                Standard — ₦3,000
+              </p>
+
+              <p className="text-sm text-gray-600 mt-1">
+                ₦50 per completed 2-hour cycle
+              </p>
+
+              <p className="text-sm text-gray-600">
+                Maximum: ₦600 per daily period
+              </p>
+
+              <p className="text-sm text-gray-600">
+                Referral bonus: ₦500
+              </p>
+            </div>
+
+            <div className="border rounded-lg p-3">
+              <p className="font-bold">
+                Premium — ₦5,000
+              </p>
+
+              <p className="text-sm text-gray-600 mt-1">
+                ₦120 per completed 2-hour cycle
+              </p>
+
+              <p className="text-sm text-gray-600">
+                Maximum: ₦1,440 per daily period
+              </p>
+
+              <p className="text-sm text-gray-600">
+                Referral bonus: ₦800
+              </p>
+            </div>
+
+          </div>
+        </section>
+
+        {/* WHATSAPP */}
+        <section className="bg-white rounded-xl shadow p-4">
+          <a
+            href="https://chat.whatsapp.com/FFGIXhlJHMRKHOB3hhp3fb?s=cl&p=a&ilr=1"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block text-center bg-green-500 text-white py-3 rounded-lg font-bold"
+          >
+            Join TapBumber WhatsApp Group
+          </a>
+        </section>
+
+      </div>
+    </main>
+  )
+}
