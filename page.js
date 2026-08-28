@@ -62,6 +62,7 @@ function getCurrentCycleInfo() {
   }
 
   const cycleDurationMinutes = 120
+
   const minutesRemaining = Math.max(
     0,
     cycleDurationMinutes - minutesIntoCycle
@@ -96,6 +97,7 @@ function formatCountdown(totalMinutes) {
 export default function Home() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
+
   const [wallet, setWallet] = useState({
     available_balance: 0,
   })
@@ -105,6 +107,16 @@ export default function Home() {
   )
 
   const [loading, setLoading] = useState(true)
+
+  const [authMode, setAuthMode] = useState('login')
+
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authMessage, setAuthMessage] = useState('')
+  const [authError, setAuthError] = useState('')
+
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -128,11 +140,13 @@ export default function Home() {
 
         setUser(user)
 
+        // No user = show login screen
         if (!user) {
           setLoading(false)
           return
         }
 
+        // Load profile
         const {
           data: profileData,
           error: profileError,
@@ -140,16 +154,17 @@ export default function Home() {
           .from('profiles')
           .select('*')
           .eq('id', user.id)
-          .single()
+          .maybeSingle()
 
         if (profileError) {
-          throw profileError
+          console.error('Profile error:', profileError)
         }
 
         if (!mounted) return
 
-        setProfile(profileData)
+        setProfile(profileData || null)
 
+        // Load wallet
         const {
           data: walletData,
           error: walletError,
@@ -157,9 +172,15 @@ export default function Home() {
           .from('wallets')
           .select('*')
           .eq('user_id', user.id)
-          .single()
+          .maybeSingle()
 
-        if (!walletError && walletData) {
+        if (walletError) {
+          console.error('Wallet error:', walletError)
+        }
+
+        if (!mounted) return
+
+        if (walletData) {
           setWallet(walletData)
         }
       } catch (err) {
@@ -179,6 +200,30 @@ export default function Home() {
 
     loadDashboard()
 
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        if (!mounted) return
+
+        const loggedInUser = session?.user || null
+
+        setUser(loggedInUser)
+
+        if (!loggedInUser) {
+          setProfile(null)
+          setWallet({
+            available_balance: 0,
+          })
+          setLoading(false)
+          return
+        }
+
+        // Reload the page data after login/signup
+        await loadDashboard()
+      }
+    )
+
     const timer = setInterval(() => {
       setCycleInfo(getCurrentCycleInfo())
     }, 1000)
@@ -186,8 +231,118 @@ export default function Home() {
     return () => {
       mounted = false
       clearInterval(timer)
+      subscription.unsubscribe()
     }
   }, [])
+
+  async function handleAuth(event) {
+    event.preventDefault()
+
+    setAuthError('')
+    setAuthMessage('')
+
+    const cleanEmail = email.trim()
+
+    if (!cleanEmail || !password) {
+      setAuthError('Please enter your email and password.')
+      return
+    }
+
+    if (password.length < 6) {
+      setAuthError(
+        'Password must be at least 6 characters.'
+      )
+      return
+    }
+
+    try {
+      setAuthLoading(true)
+
+      if (authMode === 'signup') {
+        const {
+          data,
+          error: signUpError,
+        } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+        })
+
+        if (signUpError) {
+          throw signUpError
+        }
+
+        if (data.session) {
+          setAuthMessage(
+            'Account created successfully. Loading your TapBumber account...'
+          )
+        } else {
+          setAuthMessage(
+            'Account created! Please check your email and confirm your account before logging in.'
+          )
+        }
+      } else {
+        const {
+          data,
+          error: loginError,
+        } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password,
+        })
+
+        if (loginError) {
+          throw loginError
+        }
+
+        if (!data.session) {
+          throw new Error(
+            'Login completed but no session was created.'
+          )
+        }
+
+        setAuthMessage(
+          'Login successful. Loading TapBumber...'
+        )
+      }
+    } catch (err) {
+      console.error('Authentication error:', err)
+
+      setAuthError(
+        err?.message ||
+          'Authentication failed. Please try again.'
+      )
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      setAuthError('')
+      setAuthMessage('')
+
+      const { error: logoutError } =
+        await supabase.auth.signOut()
+
+      if (logoutError) {
+        throw logoutError
+      }
+
+      setUser(null)
+      setProfile(null)
+      setWallet({
+        available_balance: 0,
+      })
+
+      setEmail('')
+      setPassword('')
+    } catch (err) {
+      console.error('Logout error:', err)
+
+      setAuthError(
+        'Unable to log out right now. Please try again.'
+      )
+    }
+  }
 
   const selectedPackage = profile?.package
     ? PACKAGES[profile.package]
@@ -198,29 +353,195 @@ export default function Home() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
         <div className="text-center">
           <h1 className="text-2xl font-bold text-green-700">
             TAPBUMBER
           </h1>
+
           <p className="mt-2 text-gray-600">
-            Loading your dashboard...
+            Loading...
           </p>
         </div>
       </main>
     )
   }
 
+  // =========================
+  // LOGIN / SIGN UP SCREEN
+  // =========================
+
+  if (!user) {
+    return (
+      <main className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+
+          <div className="bg-green-700 text-white rounded-t-2xl p-6 text-center">
+            <h1 className="text-3xl font-bold">
+              TAPBUMBER
+            </h1>
+
+            <p className="text-sm mt-2">
+              Nigerian Naira Earning Platform
+            </p>
+          </div>
+
+          <div className="bg-white rounded-b-2xl shadow-lg p-6">
+
+            <h2 className="text-2xl font-bold text-center text-gray-800">
+              {authMode === 'login'
+                ? 'Welcome Back'
+                : 'Create Your Account'}
+            </h2>
+
+            <p className="text-center text-gray-500 text-sm mt-2">
+              {authMode === 'login'
+                ? 'Log in to continue to TapBumber'
+                : 'Sign up to start using TapBumber'}
+            </p>
+
+            <form
+              onSubmit={handleAuth}
+              className="mt-6 space-y-4"
+            >
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email
+                </label>
+
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) =>
+                    setEmail(e.target.value)
+                  }
+                  placeholder="Enter your email"
+                  autoComplete="email"
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:border-green-600"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Password
+                </label>
+
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) =>
+                    setPassword(e.target.value)
+                  }
+                  placeholder="Enter your password"
+                  autoComplete={
+                    authMode === 'login'
+                      ? 'current-password'
+                      : 'new-password'
+                  }
+                  className="w-full border border-gray-300 rounded-lg px-4 py-3 outline-none focus:border-green-600"
+                  required
+                />
+              </div>
+
+              {authError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">
+                  {authError}
+                </div>
+              )}
+
+              {authMessage && (
+                <div className="bg-green-50 border border-green-200 text-green-700 rounded-lg p-3 text-sm">
+                  {authMessage}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-green-600 disabled:bg-gray-400 text-white py-3 rounded-lg font-bold"
+              >
+                {authLoading
+                  ? 'Please wait...'
+                  : authMode === 'login'
+                  ? 'Log In'
+                  : 'Create Account'}
+              </button>
+
+            </form>
+
+            <div className="text-center mt-6">
+
+              {authMode === 'login' ? (
+                <p className="text-sm text-gray-600">
+                  Don't have an account?
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('signup')
+                      setAuthError('')
+                      setAuthMessage('')
+                    }}
+                    className="ml-1 text-green-700 font-bold"
+                  >
+                    Sign Up
+                  </button>
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600">
+                  Already have an account?
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('login')
+                      setAuthError('')
+                      setAuthMessage('')
+                    }}
+                    className="ml-1 text-green-700 font-bold"
+                  >
+                    Log In
+                  </button>
+                </p>
+              )}
+
+            </div>
+
+          </div>
+        </div>
+      </main>
+    )
+  }
+
+  // =========================
+  // TAPBUMBER DASHBOARD
+  // =========================
+
   return (
     <main className="min-h-screen bg-gray-50 pb-20">
-      <header className="bg-green-700 text-white p-4 text-center">
-        <h1 className="text-2xl font-bold">
-          TAPBUMBER
-        </h1>
 
-        <p className="text-sm">
-          Nigerian Naira Earning Platform
-        </p>
+      <header className="bg-green-700 text-white p-4">
+        <div className="flex items-center justify-between gap-3">
+
+          <div>
+            <h1 className="text-2xl font-bold">
+              TAPBUMBER
+            </h1>
+
+            <p className="text-sm">
+              Nigerian Naira Earning Platform
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="bg-white text-green-700 px-3 py-2 rounded-lg font-bold text-sm"
+          >
+            Log Out
+          </button>
+
+        </div>
       </header>
 
       <div className="p-4 space-y-4">
@@ -232,42 +553,61 @@ export default function Home() {
         )}
 
         {/* WALLET */}
+
         <section className="bg-white rounded-xl shadow p-4">
+
           <p className="text-gray-500 text-sm">
             Available Balance
           </p>
 
           <p className="text-3xl font-bold text-green-700">
-            ₦{Number(wallet.available_balance || 0).toFixed(2)}
+            ₦{Number(
+              wallet.available_balance || 0
+            ).toFixed(2)}
           </p>
+
         </section>
 
         {/* ACCOUNT */}
+
         <section className="bg-white rounded-xl shadow p-4">
+
           <h2 className="font-bold text-lg mb-2">
             Account
           </h2>
 
           <p className="text-sm text-gray-600">
-            User ID
+            Email
           </p>
 
           <p className="font-medium break-all">
+            {user?.email || 'No email'}
+          </p>
+
+          <p className="text-sm text-gray-600 mt-3">
+            User ID
+          </p>
+
+          <p className="font-medium break-all text-xs">
             {user?.id || 'Not logged in'}
           </p>
 
           <div className="mt-3">
+
             <p className="text-sm text-gray-600">
               Activation Status
             </p>
 
             <p className="font-bold">
-              {profile?.activation_status || 'Not Activated'}
+              {profile?.activation_status ||
+                'Not Activated'}
             </p>
+
           </div>
 
           {profile?.package && (
             <div className="mt-2">
+
               <p className="text-sm text-gray-600">
                 Package
               </p>
@@ -275,12 +615,16 @@ export default function Home() {
               <p className="font-bold">
                 {profile.package}
               </p>
+
             </div>
           )}
+
         </section>
 
         {/* CURRENT CYCLE */}
+
         <section className="bg-white rounded-xl shadow p-4">
+
           <h2 className="font-bold text-lg">
             Current Earning Cycle
           </h2>
@@ -300,6 +644,7 @@ export default function Home() {
           </p>
 
           <div className="mt-3 space-y-1 text-sm text-gray-600">
+
             <p>
               Reward per cycle:{' '}
               <strong>₦{reward}</strong>
@@ -309,6 +654,7 @@ export default function Home() {
               Today's maximum:{' '}
               <strong>₦{maxDaily}</strong>
             </p>
+
           </div>
 
           <button
@@ -323,10 +669,13 @@ export default function Home() {
               ? `Claim ₦${reward}`
               : 'Activate to Earn'}
           </button>
+
         </section>
 
         {/* PACKAGES */}
+
         <section className="bg-white rounded-xl shadow p-4">
+
           <h2 className="font-bold text-lg mb-3">
             Activation Packages
           </h2>
@@ -334,6 +683,7 @@ export default function Home() {
           <div className="space-y-3">
 
             <div className="border rounded-lg p-3">
+
               <p className="font-bold">
                 Standard — ₦3,000
               </p>
@@ -349,9 +699,11 @@ export default function Home() {
               <p className="text-sm text-gray-600">
                 Referral bonus: ₦500
               </p>
+
             </div>
 
             <div className="border rounded-lg p-3">
+
               <p className="font-bold">
                 Premium — ₦5,000
               </p>
@@ -367,13 +719,17 @@ export default function Home() {
               <p className="text-sm text-gray-600">
                 Referral bonus: ₦800
               </p>
+
             </div>
 
           </div>
+
         </section>
 
         {/* WHATSAPP */}
+
         <section className="bg-white rounded-xl shadow p-4">
+
           <a
             href="https://chat.whatsapp.com/FFGIXhlJHMRKHOB3hhp3fb?s=cl&p=a&ilr=1"
             target="_blank"
@@ -382,9 +738,11 @@ export default function Home() {
           >
             Join TapBumber WhatsApp Group
           </a>
+
         </section>
 
       </div>
+
     </main>
   )
 }
